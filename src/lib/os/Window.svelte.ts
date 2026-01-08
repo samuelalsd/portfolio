@@ -303,12 +303,21 @@ export class OSWindow {
 
 				if (
 					position === 'left' &&
-					(deltaX > 0 || (e.clientX <= this.#left.current && this.#width.current > this.#minWidth))
+					((deltaX > 0 && this.#width.current > this.#minWidth) || e.clientX <= this.#left.current)
 				) {
-					const currentWidth = this.#width.current;
+					const currentWidth = this.ref!.clientWidth;
 					const right = innerWidth.current! - this.#left.current - currentWidth;
+					// const newLeft = e.clientX;
+					// const newWidth = innerWidth.current! - e.clientX - right;
+					// const newRight = Math.max(innerWidth.current! - newLeft - currentWidth, 0);
+					// if (right !== newRight) {
+					// 	console.log('left: ', this.#left.current, '->', newLeft);
+					// 	console.log('width: ', this.#width.current, '->', newWidth);
+					// 	console.log('right: ', right, '->', newRight);
+					// 	console.log('right', right);
+					// }
+					this.#width.current = innerWidth.current! - e.clientX + right;
 					this.#left.current = e.clientX;
-					this.#width.current = innerWidth.current! - this.#left.current - right;
 					// [--left-(width)--x--]
 					// <--- INNER WIDTH --->
 					// x = innerWidth - left - width

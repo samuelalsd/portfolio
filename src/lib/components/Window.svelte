@@ -28,6 +28,12 @@
 		<div class="flex bg-[#ddd]">
 			<div class="flex flex-1 items-center justify-center" {@attach self.titleBar}>
 				{self.title}
+				<div>
+					<span
+						>{self.width.current}x{self.height.current}px - x: {self.left.current}, y: {self.top
+							.current}</span
+					>
+				</div>
 			</div>
 			<div
 				class="ml-auto flex items-center *:flex *:size-11 *:items-center *:justify-center *:hover:bg-[#ccc]"
