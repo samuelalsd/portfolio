@@ -289,21 +289,31 @@ export class OSWindow {
 				setMoveStyles();
 				document.addEventListener('mousemove', handleMouseMove);
 				document.addEventListener('mouseup', handleMouseUp);
-				document.body.addEventListener('mouseenter', handleMouseEnter);
-				document.body.addEventListener('mouseleave', handleMouseLeave);
+				main.addEventListener('mouseenter', handleMouseEnter);
+				main.addEventListener('mouseleave', handleMouseLeave);
 			};
 
 			const handleMouseMove = (e: MouseEvent) => {
 				if (!mouseIsDown) return;
-				console.log('mouse is moving');
+
+				const mainRect = main.getBoundingClientRect();
+
 				const deltaX = e.clientX - lastX;
 				const deltaY = e.clientY - lastY;
 
-				if (position === 'left' && (deltaX > 0 || e.clientX <= this.#left.current)) {
-					if (deltaX < 0 || this.#width.current > this.#minWidth) {
-						this.#left.current += deltaX;
-					}
-					this.#width.current -= deltaX;
+				if (
+					position === 'left' &&
+					(deltaX > 0 || (e.clientX <= this.#left.current && this.#width.current > this.#minWidth))
+				) {
+					const currentWidth = this.#width.current;
+					const right = innerWidth.current! - this.#left.current - currentWidth;
+					this.#left.current = e.clientX;
+					this.#width.current = innerWidth.current! - this.#left.current - right;
+					// [--left-(width)--x--]
+					// <--- INNER WIDTH --->
+					// x = innerWidth - left - width
+					// x + width = innerWidth - left
+					// width = innerWidth - left - x
 				}
 
 				if (
@@ -315,15 +325,20 @@ export class OSWindow {
 						e.clientX >= this.#left.current + this.#width.current) ||
 						deltaX < 0)
 				) {
-					this.#width.current += deltaX;
+					this.#width.current = e.clientX - this.#left.current; // THIS IS THE BETTER WAY
 				}
 
-				if (position === 'top' && (deltaY > 0 || e.clientY <= this.#top.current)) {
-					if (deltaY < 0 || this.#height.current > this.#minHeight) {
-						console.log('deltaY', deltaY);
-						console.log('this.#height.current', this.#height.current);
-						this.#top.current += deltaY;
-					}
+				if (
+					position === 'top' &&
+					((deltaY > 0 &&
+						this.#height.current > this.#minHeight &&
+						e.clientY >= mainRect.y &&
+						e.clientY >= this.#top.current &&
+						e.clientY <= this.#top.current + this.#height.current) ||
+						(deltaY < 0 && e.clientY >= mainRect.y && e.clientY <= this.#top.current + mainRect.y))
+				) {
+					console.log('e.clientY', e.clientY);
+					this.#top.current += deltaY;
 					this.#height.current -= deltaY;
 				}
 
@@ -336,6 +351,8 @@ export class OSWindow {
 			};
 
 			const handleMouseLeave = (e: MouseEvent) => {
+				console.log('mouse left', e);
+
 				if (position === 'right' && e.clientX > innerWidth.current!) {
 					this.#width.current = innerWidth.current! - this.#left.current;
 				}
@@ -353,7 +370,8 @@ export class OSWindow {
 				resetStyles();
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				document.body.removeEventListener('mouseleave', handleMouseLeave);
+				main.removeEventListener('mouseenter', handleMouseEnter);
+				main.removeEventListener('mouseleave', handleMouseLeave);
 			};
 
 			node.addEventListener('mousedown', handleMouseDown);
@@ -362,8 +380,8 @@ export class OSWindow {
 				node.removeEventListener('mousedown', handleMouseDown);
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				document.body.removeEventListener('mouseenter', handleMouseEnter);
-				document.body.removeEventListener('mouseleave', handleMouseLeave);
+				main.removeEventListener('mouseenter', handleMouseEnter);
+				main.removeEventListener('mouseleave', handleMouseLeave);
 			};
 		};
 	};

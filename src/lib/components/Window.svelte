@@ -23,7 +23,7 @@
 >
 	<div
 		bind:this={self.ref}
-		class="window relative origin-center overflow-hidden rounded-lg bg-[#f2f2f2] shadow-2xl transition-[width,height]"
+		class="window relative z-10 origin-center overflow-hidden rounded-lg bg-[#f2f2f2] shadow-2xl transition-[width,height]"
 	>
 		<div class="flex bg-[#ddd]">
 			<div class="flex flex-1 items-center justify-center" {@attach self.titleBar}>

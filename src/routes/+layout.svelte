@@ -51,7 +51,7 @@
 	</div>
 </header>
 
-<main class="relative">
+<main class="relative h-full">
 	{@render children()}
 	<button
 		onclick={() =>
@@ -60,18 +60,18 @@
 	>
 		Open window
 	</button>
-</main>
 
-<div
-	bind:this={dock}
-	class="fixed bottom-8 left-1/2 z-200 container h-18 w-full -translate-x-1/2 rounded-lg bg-white/5 backdrop-blur-xl"
->
-	<ul class="flex gap-x-1">
-		{#each WindowsManager.stack as w (w)}
-			<li><button onclick={w.maximize}>{w.title}</button></li>
-		{/each}
-	</ul>
-</div>
+	<div
+		bind:this={dock}
+		class="fixed bottom-8 left-1/2 z-200 container h-18 w-full -translate-x-1/2 rounded-lg bg-white/5 backdrop-blur-xl"
+	>
+		<ul class="flex gap-x-1">
+			{#each WindowsManager.stack as w (w)}
+				<li><button onclick={w.maximize}>{w.title}</button></li>
+			{/each}
+		</ul>
+	</div>
+</main>
 
 <style lang="postcss">
 	@reference 'tailwindcss';
