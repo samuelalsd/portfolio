@@ -1,205 +1,38 @@
 <script lang="ts">
-	import { Previous } from 'runed';
-	import type { Snippet } from 'svelte';
-	import type { Attachment } from 'svelte/attachments';
-	import type { SvelteHTMLElements } from 'svelte/elements';
-	import { innerWidth, innerHeight } from 'svelte/reactivity/window';
+	import { WindowsManager, type OSWindow } from '$lib/os/Window.svelte';
 
-	type Props = SvelteHTMLElements['div'] & {
-		children: Snippet;
-		ref?: HTMLDivElement;
+	type Props = {
+		self: OSWindow;
 	};
 
-	let { children, ref = $bindable(), class: className, ...rest }: Props = $props();
-
-	const defaults = {
-		initiallyMaximized: false,
-		initiallyFullscreen: false,
-		initialWidth: 768,
-		initialHeight: 420
-	};
-
-	class Clamped {
-		#value: number;
-		#min: number;
-		#max: number;
-		constructor(value: number, { min, max }: { min?: () => number; max?: () => number }) {
-			this.#value = value;
-			this.#min = $derived(min?.() ?? -Infinity);
-			this.#max = $derived(max?.() ?? Infinity);
-		}
-		get value() {
-			return this.#value;
-		}
-		set value(value: number) {
-			this.#value = Math.max(this.#min, Math.min(value, this.#max));
-		}
-	}
-
-	class OSWindow {
-		ref: HTMLDivElement | undefined = $state();
-
-		#left: number = $state(0);
-		#top: number = $state(0);
-		#width: number = $state();
-		#height: number = $state();
-
-		#previousLeft: number | undefined;
-		#previousTop: number | undefined;
-		#previousWidth: number | undefined;
-		#previousHeight: number | undefined;
-
-		#maximized: boolean = $state(false);
-		#fullscreen: boolean = $state(false);
-
-		constructor(options?: {
-			ref?: HTMLDivElement;
-			initiallyMaximized?: boolean;
-			initiallyFullscreen?: boolean;
-			initialWidth?: number;
-			initialHeight?: number;
-		}) {
-			const { ref, initiallyMaximized, initiallyFullscreen, initialWidth, initialHeight } = {
-				...defaults,
-				...options
-			};
-
-			if (ref) this.ref = ref;
-
-			// this.#left = new Clamped(0, { min: () => 0, max: () => innerWidth.current - this.#width });
-			// this.#top = new Clamped(0, { min: () => 0, max: () => innerHeight.current });
-
-			if (initiallyFullscreen) this.toggleFullscreen(true);
-			else if (initiallyMaximized) this.maximize();
-			else {
-				this.#width = initialWidth;
-				this.#height = initialHeight;
-				this.#previousWidth = initialWidth;
-				this.#previousHeight = initialHeight;
-			}
-		}
-
-		get left() {
-			return this.#left;
-		}
-
-		get top() {
-			return this.#top;
-		}
-
-		get width() {
-			return this.#width;
-		}
-
-		get height() {
-			return this.#height;
-		}
-
-		maximize = () => {
-			this.#previousWidth = this.#width;
-			this.#previousHeight = this.#height;
-
-			this.#width = innerWidth.current;
-			this.#height = innerHeight.current;
-
-			this.#maximized = true;
-		};
-
-		minimize = () => {
-			this.#width = this.#previousWidth;
-			this.#height = this.#previousHeight;
-			this.#maximized = false;
-		};
-
-		toggleSize = () => {
-			if (this.#maximized) {
-				this.minimize();
-			} else {
-				this.maximize();
-			}
-		};
-
-		toggleFullscreen = (value?: boolean) => {
-			//do stuff
-			this.#fullscreen = typeof value === 'boolean' ? value : !this.#fullscreen;
-		};
-
-		title_bar: Attachment = (node: Element) => {
-			let lastX = 0;
-			let lastY = 0;
-			let isDragging = false;
-			let mouseIsDown = false;
-			let lastClick = 0;
-			let isDoubleClick = false;
-
-			const handleClick = (e: MouseEvent) => {
-				const click = Date.now();
-				isDoubleClick = click - lastClick < 300;
-				lastClick = click;
-			};
-
-			const handleMouseDown = (e: MouseEvent) => {
-				mouseIsDown = true;
-				lastX = e.clientX;
-				lastY = e.clientY;
-				this.ref?.style.setProperty('user-select', 'none');
-				this.ref?.style.setProperty('-webkit-user-select', 'none');
-			};
-
-			const handleMouseEnd = (e: MouseEvent) => {
-				mouseIsDown = false;
-				this.ref?.style.setProperty('user-select', 'initial');
-				this.ref?.style.setProperty('-webkit-user-select', 'initial');
-			};
-
-			const handleMouseMove = (e: MouseEvent) => {
-				if (!mouseIsDown) return;
-				const deltaX = e.clientX - lastX;
-				const deltaY = e.clientY - lastY;
-				this.#left += deltaX;
-				this.#top += deltaY;
-				lastX = e.clientX;
-				lastY = e.clientY;
-			};
-
-			if (node instanceof HTMLElement) {
-				node.addEventListener('click', handleClick);
-				node.addEventListener('mousedown', handleMouseDown);
-				this.ref?.addEventListener('mousemove', handleMouseMove);
-				this.ref?.addEventListener('mouseup', handleMouseEnd);
-			}
-
-			return () => {
-				if (node instanceof HTMLElement) {
-					node.removeEventListener('click', handleClick);
-					node.removeEventListener('mousedown', handleMouseDown);
-					this.ref?.removeEventListener('mousemove', handleMouseMove);
-					this.ref?.removeEventListener('mouseup', handleMouseEnd);
-				}
-			};
-		};
-	}
-
-	const self = $derived(new OSWindow({ ref }));
+	let { self }: Props = $props();
 </script>
 
-<div class="absolute h-fit w-fit" style:left="{self.left}px" style:top="{self.top}px">
+<div
+	bind:this={self.wrapper}
+	class="absolute h-fit w-fit transition-[top,left]"
+	tabindex="0"
+	role="dialog"
+	onclick={() => WindowsManager.moveOnTop(self)}
+	onfocus={() => WindowsManager.moveOnTop(self)}
+	onkeyup={(e) => {
+		if (e.key === 'Space' || e.key === 'Enter') {
+			WindowsManager.moveOnTop(self);
+		}
+	}}
+>
 	<div
-		bind:this={ref}
-		{...rest}
-		class={[
-			'window relative z-10 overflow-hidden rounded-lg bg-[#f2f2f2] shadow-2xl transition-[width,height,top,left]',
-			className
-		]}
-		style:width="{self.width}px"
-		style:height="{self.height}px"
+		bind:this={self.ref}
+		class="window relative origin-center overflow-hidden rounded-lg bg-[#f2f2f2] shadow-2xl transition-[width,height]"
 	>
-		<div class="flex h-12 bg-[#ddd]" {@attach self.title_bar}>
-			<!--  -->
+		<div class="flex bg-[#ddd]">
+			<div class="flex flex-1 items-center justify-center" {@attach self.titleBar}>
+				{self.title}
+			</div>
 			<div
-				class="ml-auto flex items-center *:flex *:size-12 *:items-center *:justify-center *:hover:bg-[#ccc]"
+				class="ml-auto flex items-center *:flex *:size-11 *:items-center *:justify-center *:hover:bg-[#ccc]"
 			>
-				<button title="Minimize window" onclick={self.minimize}>
+				<button title="Minimize window">
 					<svg
 						viewBox="0 0 24 24"
 						fill="none"
@@ -218,7 +51,7 @@
 						></path>
 					</svg>
 				</button>
-				<button title="Maximize window" onclick={self.maximize}>
+				<button title="Maximize window" onclick={self.toggleSize}>
 					<svg
 						viewBox="0 0 24 24"
 						fill="none"
@@ -241,7 +74,7 @@
 						></path>
 					</svg>
 				</button>
-				<button title="Close window">
+				<button title="Close window" onclick={() => self.destroy()}>
 					<svg
 						viewBox="0 0 24 24"
 						fill="none"
@@ -263,19 +96,47 @@
 			</div>
 		</div>
 		<div>
-			{@render children()}
+			{@render self.children()}
 		</div>
 	</div>
 	<!-- Top -->
-	<div class="absolute -top-1 right-1 left-1 z-20 h-2 cursor-row-resize"></div>
+	<div
+		class="absolute -top-1 right-1 left-1 z-20 h-2 cursor-row-resize bg-[red]"
+		{@attach self.resizeHandle('top')}
+	></div>
 	<!-- North west -->
-	<div class="absolute -top-1 -left-1 z-20 h-2 w-2 cursor-nw-resize"></div>
+	<div
+		class="absolute -top-1 -left-1 z-20 h-2 w-2 cursor-nw-resize bg-[red]"
+		{@attach self.resizeHandle('nw')}
+	></div>
 	<!-- North east -->
-	<div class="absolute -top-1 -right-1 z-20 w-2 cursor-ne-resize"></div>
+	<div
+		class="absolute -top-1 -right-1 z-20 h-2 w-2 cursor-ne-resize bg-[red]"
+		{@attach self.resizeHandle('ne')}
+	></div>
+	<!-- South west -->
+	<div
+		class="absolute -bottom-1 -left-1 z-20 h-2 w-2 cursor-sw-resize bg-[red]"
+		{@attach self.resizeHandle('sw')}
+	></div>
+	<!-- South east -->
+	<div
+		class="absolute -right-1 -bottom-1 z-20 h-2 w-2 cursor-se-resize bg-[red]"
+		{@attach self.resizeHandle('se')}
+	></div>
 	<!-- Left -->
-	<div class="absolute top-1 bottom-1 -left-1 z-20 w-2 cursor-col-resize"></div>
+	<div
+		class="absolute top-1 bottom-1 -left-1 z-20 w-2 cursor-col-resize bg-[red]"
+		{@attach self.resizeHandle('left')}
+	></div>
 	<!-- Right -->
-	<div class="absolute top-1 -right-1 bottom-1 z-20 w-2 cursor-col-resize"></div>
+	<div
+		class="absolute top-1 -right-1 bottom-1 z-20 w-2 cursor-col-resize bg-[red]"
+		{@attach self.resizeHandle('right')}
+	></div>
 	<!-- Bottom -->
-	<div class="absolute right-1 -bottom-1 left-1 z-20 h-2 cursor-row-resize"></div>
+	<div
+		class="absolute right-1 -bottom-1 left-1 z-20 h-2 cursor-row-resize bg-[red]"
+		{@attach self.resizeHandle('bottom')}
+	></div>
 </div>

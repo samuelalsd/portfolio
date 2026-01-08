@@ -4,14 +4,23 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { CurrentDateTime } from '$lib/utils/datetime.svelte';
 	import { capitalize } from '$lib/utils/string';
-	import Window from '$lib/components/Window.svelte';
+	import { WindowsManager } from '$lib/os/Window.svelte';
 
 	let { children } = $props();
 
 	const currentDateTime = new CurrentDateTime();
 
 	let dock: HTMLElement | undefined = $state();
+
+	$inspect(WindowsManager.stack);
 </script>
+
+{#snippet baseWindow()}
+	<div class="grid h-full grid-cols-[24rem_1fr]">
+		<div class="border-r border-solid border-[#ccc]"></div>
+		<div class="bg-white p-6">Wesh bien ou bien?</div>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
@@ -42,14 +51,27 @@
 	</div>
 </header>
 
-{@render children()}
-
-<Window>This is just an empty window.</Window>
+<main class="relative">
+	{@render children()}
+	<button
+		onclick={() =>
+			WindowsManager.open(baseWindow, { title: `This is a test ${WindowsManager.stack.length}` })}
+		class="relative bg-white px-5 py-3"
+	>
+		Open window
+	</button>
+</main>
 
 <div
 	bind:this={dock}
-	class="fixed bottom-8 left-1/2 container h-18 w-full -translate-x-1/2 rounded-lg bg-white/5 backdrop-blur-xl"
-></div>
+	class="fixed bottom-8 left-1/2 z-200 container h-18 w-full -translate-x-1/2 rounded-lg bg-white/5 backdrop-blur-xl"
+>
+	<ul class="flex gap-x-1">
+		{#each WindowsManager.stack as w (w)}
+			<li><button onclick={w.maximize}>{w.title}</button></li>
+		{/each}
+	</ul>
+</div>
 
 <style lang="postcss">
 	@reference 'tailwindcss';
