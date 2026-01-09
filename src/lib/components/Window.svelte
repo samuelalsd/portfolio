@@ -1,44 +1,47 @@
 <script lang="ts">
 	import { WindowsManager, type OSWindow } from '$lib/os/Window.svelte';
+	import { onDestroy } from 'svelte';
 
 	type Props = {
 		self: OSWindow;
 	};
 
 	let { self }: Props = $props();
+
+	onDestroy(() => {
+		console.log('clearing instance...');
+		self.clearInstance();
+	});
 </script>
 
 <div
+	hidden={self.isMinimized}
 	bind:this={self.wrapper}
-	class="absolute h-fit w-fit transition-[top,left]"
+	class="absolute h-fit w-fit rounded-lg bg-white/50 shadow-xl transition-[top,left,height,width]"
 	tabindex="0"
 	role="dialog"
-	onclick={() => WindowsManager.moveOnTop(self)}
-	onfocus={() => WindowsManager.moveOnTop(self)}
-	onkeyup={(e) => {
-		if (e.key === 'Space' || e.key === 'Enter') {
-			WindowsManager.moveOnTop(self);
-		}
-	}}
+	onmousedown={() => WindowsManager.focusWindow(self)}
 >
 	<div
 		bind:this={self.ref}
-		class="window relative z-10 origin-center overflow-hidden rounded-lg bg-[#f2f2f2] shadow-2xl transition-[width,height]"
+		data-maximized={self.isMaximized}
+		class="group/window relative z-10 flex origin-center flex-col items-stretch overflow-hidden transition-[width,height] data-[maximized=false]:rounded-lg"
 	>
-		<div class="flex bg-[#ddd]">
-			<div class="flex flex-1 items-center justify-center" {@attach self.titleBar}>
+		<header
+			class="z-1 flex shrink-0 bg-[#131313] text-white group-data-[maximized=false]/window:rounded-t-lg"
+		>
+			<div class="flex flex-1 items-center justify-start px-3" {@attach self.titleBar}>
 				{self.title}
-				<div>
-					<span
-						>{self.width.current}x{self.height.current}px - x: {self.left.current}, y: {self.top
-							.current}</span
-					>
-				</div>
 			</div>
 			<div
-				class="ml-auto flex items-center *:flex *:size-11 *:items-center *:justify-center *:hover:bg-[#ccc]"
+				class="ml-auto flex items-center *:flex *:size-8 *:items-center *:justify-center *:hover:bg-white/10"
 			>
-				<button title="Minimize window">
+				<button
+					title="Minimize window"
+					onclick={() => {
+						self.toggleMinimized(true);
+					}}
+				>
 					<svg
 						viewBox="0 0 24 24"
 						fill="none"
@@ -57,7 +60,7 @@
 						></path>
 					</svg>
 				</button>
-				<button title="Maximize window" onclick={self.toggleSize}>
+				<button title="Maximize window" onclick={() => self.toggleMaximized()}>
 					<svg
 						viewBox="0 0 24 24"
 						fill="none"
@@ -100,49 +103,61 @@
 					</svg>
 				</button>
 			</div>
-		</div>
-		<div>
+		</header>
+		<div
+			class="relative h-full flex-1 overflow-hidden rounded-b-lg border border-solid border-[#ddd] bg-[#f2f2f2]"
+		>
 			{@render self.children()}
 		</div>
 	</div>
 	<!-- Top -->
 	<div
-		class="absolute -top-1 right-1 left-1 z-20 h-2 cursor-row-resize bg-[red]"
+		class="absolute -top-1 right-1 left-1 z-20 h-2 cursor-n-resize"
 		{@attach self.resizeHandle('top')}
 	></div>
 	<!-- North west -->
 	<div
-		class="absolute -top-1 -left-1 z-20 h-2 w-2 cursor-nw-resize bg-[red]"
+		class="absolute -top-1 -left-1 z-20 h-2 w-2 cursor-nw-resize"
 		{@attach self.resizeHandle('nw')}
 	></div>
 	<!-- North east -->
 	<div
-		class="absolute -top-1 -right-1 z-20 h-2 w-2 cursor-ne-resize bg-[red]"
+		class="absolute -top-1 -right-1 z-20 h-2 w-2 cursor-ne-resize"
 		{@attach self.resizeHandle('ne')}
 	></div>
 	<!-- South west -->
 	<div
-		class="absolute -bottom-1 -left-1 z-20 h-2 w-2 cursor-sw-resize bg-[red]"
+		class="absolute -bottom-1 -left-1 z-20 h-2 w-2 cursor-sw-resize"
 		{@attach self.resizeHandle('sw')}
 	></div>
 	<!-- South east -->
 	<div
-		class="absolute -right-1 -bottom-1 z-20 h-2 w-2 cursor-se-resize bg-[red]"
+		class="absolute -right-1 -bottom-1 z-20 h-2 w-2 cursor-se-resize"
 		{@attach self.resizeHandle('se')}
 	></div>
 	<!-- Left -->
 	<div
-		class="absolute top-1 bottom-1 -left-1 z-20 w-2 cursor-col-resize bg-[red]"
+		class="absolute top-1 bottom-1 -left-1 z-20 w-2 cursor-w-resize"
 		{@attach self.resizeHandle('left')}
 	></div>
 	<!-- Right -->
 	<div
-		class="absolute top-1 -right-1 bottom-1 z-20 w-2 cursor-col-resize bg-[red]"
+		class="absolute top-1 -right-1 bottom-1 z-20 w-2 cursor-e-resize"
 		{@attach self.resizeHandle('right')}
 	></div>
 	<!-- Bottom -->
 	<div
-		class="absolute right-1 -bottom-1 left-1 z-20 h-2 cursor-row-resize bg-[red]"
+		class="absolute right-1 -bottom-1 left-1 z-20 h-2 cursor-s-resize"
 		{@attach self.resizeHandle('bottom')}
 	></div>
 </div>
+
+<style lang="postcss">
+	@reference 'tailwindcss';
+	header {
+		box-shadow:
+			0 3px 4px rgba(0, 0, 0, 0.075),
+			inset 0 -1px 0 0 rgb(255 255 255 / 10%),
+			inset 0 1.5px 0 0 rgb(255 255 255 / 10%);
+	}
+</style>

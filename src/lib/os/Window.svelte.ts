@@ -1,4 +1,4 @@
-import { mount, unmount, type Snippet } from 'svelte';
+import { mount, unmount, type MountOptions, type Snippet } from 'svelte';
 import { innerHeight, innerWidth } from 'svelte/reactivity/window';
 import type { Attachment } from 'svelte/attachments';
 import { browser } from '$app/environment';
@@ -16,6 +16,7 @@ const defaults = {
 
 interface OSWindowOptions {
 	title: string;
+	target?: Exclude<MountOptions['target'], Document> | string;
 	wrapper?: HTMLDivElement;
 	ref?: HTMLDivElement;
 	initiallyMaximized?: boolean;
@@ -28,9 +29,10 @@ interface OSWindowOptions {
 
 export class OSWindows {
 	#stack: OSWindow[] = $state([]);
+	#positions: string[] = $state([]);
 
 	getStackPosition = $derived((w: OSWindow) => {
-		const index = this.#stack.indexOf(w);
+		const index = this.#positions.indexOf(w.id);
 		return index !== -1 ? index : -1;
 	});
 
@@ -41,6 +43,7 @@ export class OSWindows {
 	open(children: Snippet, options: OSWindowOptions) {
 		const w = new OSWindow(children, options);
 		this.#stack.push(w);
+		this.#positions.push(w.id);
 		w.render();
 		return w;
 	}
@@ -48,29 +51,40 @@ export class OSWindows {
 	destroy(w: OSWindow) {
 		w.destroy();
 		const index = this.#stack.indexOf(w);
-		if (index !== -1) this.#stack.splice(index, 1);
+		if (index !== -1) {
+			this.#stack.splice(index, 1);
+			this.#positions = this.#positions.filter((id) => id !== w.id);
+		}
 	}
 
 	destroyAll() {
-		this.#stack.forEach(this.destroy);
+		this.#stack.forEach((w) => w.destroy());
+		this.#stack = [];
+		this.#positions = [];
 	}
 
-	moveOnTop(w: OSWindow) {
+	focusWindow(w: OSWindow) {
 		if (this.#stack.length < 2) return;
-		const index = this.#stack.indexOf(w);
-		if (index !== -1 && index !== this.#stack.length - 1) {
-			this.#stack.splice(index, 1);
-			this.#stack.push(w);
-			this.#stack = [...this.#stack];
+		const index = this.#positions.indexOf(w.id);
+		if (index !== -1 && index !== this.#positions.length - 1) {
+			this.#positions.splice(index, 1);
+			this.#positions.push(w.id);
+			this.#positions = [...this.#positions];
 		}
+	}
+
+	windowHasFocus(w: OSWindow) {
+		return this.#positions.at(-1) === w.id && !w.isMinimized;
 	}
 }
 
 export const WindowsManager = new OSWindows();
 
 export class OSWindow {
+	#id: string = $state(`w${WindowsManager.stack.length + 1}-${Date.now()}`);
 	wrapper: HTMLDivElement | undefined = $state();
 	ref: HTMLDivElement | undefined = $state();
+	#target: HTMLElement;
 	title: string;
 
 	#instance: ReturnType<typeof mount> | null = null;
@@ -89,8 +103,16 @@ export class OSWindow {
 	#previousWidth: number | undefined;
 	#previousHeight: number | undefined;
 
+	#minimized: boolean = $state(false);
 	#maximized: boolean = $state(false);
 	#fullscreen: boolean = $state(false);
+
+	#saveRect = () => {
+		this.#previousWidth = this.#width.current;
+		this.#previousHeight = this.#height.current;
+		this.#previousLeft = this.#left.current;
+		this.#previousTop = this.#top.current;
+	};
 
 	constructor(children: Snippet, options: OSWindowOptions) {
 		if (!browser) throw new Error('OSWindow cannot be created outside of a browser environment.');
@@ -98,6 +120,7 @@ export class OSWindow {
 		const {
 			ref,
 			wrapper,
+			target = document.querySelector('main'),
 			title,
 			initiallyMaximized,
 			initiallyFullscreen,
@@ -110,6 +133,18 @@ export class OSWindow {
 			...options
 		};
 
+		if (typeof target === 'string') {
+			const found = document.querySelector(target);
+			if (!found) throw new Error(`Target element with selector "${target}" not found.`);
+			if (!(found instanceof HTMLElement))
+				throw new Error('Target element must be an HTMLElement.');
+			this.#target = found;
+		} else if (target instanceof HTMLElement) {
+			this.#target = target;
+		} else {
+			throw new Error('Invalid target element.');
+		}
+
 		this.#children = children;
 		this.title = title;
 		this.wrapper = wrapper;
@@ -120,17 +155,23 @@ export class OSWindow {
 
 		this.#width = new Clamped(initialWidth, {
 			min: this.#minWidth,
-			max: () => innerWidth.current!
+			max: () => innerWidth.current! // TODO: should be changed to reactive container width
 		});
 		this.#height = new Clamped(initialHeight, {
 			min: this.#minHeight,
-			max: () => innerHeight.current!
+			max: () => innerHeight.current! // TODO: should be changed to reactive container height
 		});
-		this.#left = new Clamped(0, { min: 0, max: () => innerWidth.current! - this.#width.current });
-		this.#top = new Clamped(0, { min: 0, max: () => innerHeight.current! - this.#height.current });
+		this.#left = new Clamped(0, {
+			min: -this.#target.clientWidth + 64,
+			max: () => this.#target.clientWidth - 64
+		});
+		this.#top = new Clamped(0, {
+			min: 0,
+			max: () => this.#target.clientHeight - 64
+		});
 
 		if (initiallyFullscreen) this.toggleFullscreen(true);
-		else if (initiallyMaximized) this.maximize();
+		else if (initiallyMaximized) this.toggleMaximized(true);
 		else {
 			this.#width.current = initialWidth;
 			this.#height.current = initialHeight;
@@ -143,6 +184,8 @@ export class OSWindow {
 				if (this.wrapper) {
 					this.wrapper.style.setProperty('left', `${this.#left.current}px`);
 					this.wrapper.style.setProperty('top', `${this.#top.current}px`);
+					this.wrapper.style.setProperty('width', `${this.#width.current}px`);
+					this.wrapper.style.setProperty('height', `${this.#height.current}px`);
 				}
 			});
 
@@ -154,14 +197,18 @@ export class OSWindow {
 			});
 
 			$effect(() => {
-				if (this.ref) {
-					this.ref.style.setProperty(
+				if (this.wrapper) {
+					this.wrapper.style.setProperty(
 						'z-index',
 						(WindowsManager.getStackPosition(this) + 20).toString()
 					);
 				}
 			});
 		});
+	}
+
+	get id() {
+		return this.#id;
 	}
 
 	get children() {
@@ -184,12 +231,31 @@ export class OSWindow {
 		return this.#height;
 	}
 
+	get instance() {
+		return this.#instance;
+	}
+
+	get isMinimized() {
+		return this.#minimized;
+	}
+
+	get isMaximized() {
+		return this.#maximized;
+	}
+
+	setId = (id: string) => {
+		// if (this.#id) throw new Error(`Cannot override ID: it was already set as ${this.#id}`);
+		this.#id = id;
+	};
+
+	clearInstance = () => {
+		this.#instance = null;
+	};
+
 	render = () => {
-		const main = document.querySelector('main');
-		if (!main) throw new Error('<main> HTML element not found.');
 		if (this.#instance) return;
 		this.#instance = mount(Window, {
-			target: main,
+			target: this.#target,
 			props: {
 				self: this
 			}
@@ -203,75 +269,103 @@ export class OSWindow {
 		WindowsManager.destroy(this);
 	};
 
-	maximize = () => {
-		if (this.#maximized) return;
-
-		this.#previousWidth = this.#width.current;
-		this.#previousHeight = this.#height.current;
-		this.#previousLeft = this.#left.current;
-		this.#previousTop = this.#top.current;
-
-		if (innerWidth.current) {
-			this.#width.current = innerWidth.current;
+	toggleMinimized: {
+		(value?: true): void;
+		(
+			value?: false,
+			{ left, top }?: { left?: number; top?: number; width?: number; height?: number }
+		): void;
+	} = (
+		value,
+		{
+			left = this.#previousLeft,
+			top = this.#previousTop,
+			width = this.#previousWidth,
+			height = this.#previousHeight
+		} = {}
+	) => {
+		if (!WindowsManager.windowHasFocus(this)) {
+			WindowsManager.focusWindow(this);
+			this.#minimized = false;
+			return;
 		}
-		if (innerHeight.current) {
-			this.#height.current = innerHeight.current;
-		}
 
-		this.#left.current = 0;
-		this.#top.current = 0;
+		const newState = typeof value === 'boolean' ? value : !this.#minimized;
 
-		this.#maximized = true;
-	};
-
-	minimize = ({
-		left = this.#previousLeft,
-		top = this.#previousTop
-	}: { left?: number; top?: number } = {}) => {
-		if (!this.#maximized) return;
-
-		if (typeof this.#previousWidth === 'number') {
-			this.#width.current = this.#previousWidth;
-		}
-		if (typeof this.#previousHeight === 'number') {
-			this.#height.current = this.#previousHeight;
-		}
-		if (left) this.#left.current = left;
-		if (top) this.#top.current = top;
-
-		this.#maximized = false;
-	};
-
-	toggleSize = () => {
-		if (this.#maximized) {
-			this.minimize();
+		// we need a way to bypass the clamped values... maybe should NOT use instances of Clamped()
+		if (newState) {
+			console.log('minimizing and saving rect...');
+			// play some animation (with gsap or just native????)
+			this.#saveRect();
 		} else {
-			this.maximize();
+			if (left) this.#left.current = left;
+			else this.#left.current = 0;
+			if (top) this.#top.current = top;
+			else this.#top.current = 0;
+			if (width) this.#width.current = width;
+			else this.#width.current = this.#target.clientWidth;
+			if (height) this.#height.current = height;
+			else this.#height.current = this.#target.clientHeight;
+			// something here
+			WindowsManager.focusWindow(this);
 		}
+
+		this.#minimized = newState;
+	};
+
+	toggleMaximized: {
+		(value?: true): void;
+		(value?: false, { left, top }?: { left?: number; top?: number }): void;
+	} = (value, { left = this.#previousLeft, top = this.#previousTop } = {}) => {
+		const newState = typeof value === 'boolean' ? value : !this.#maximized;
+		if (newState) {
+			this.#saveRect();
+
+			const rect = this.#target.getBoundingClientRect();
+
+			this.#width.current = rect.width;
+			this.#height.current = rect.height;
+
+			this.#left.current = 0;
+			this.#top.current = 0;
+		} else {
+			if (typeof this.#previousWidth === 'number') {
+				this.#width.current = this.#previousWidth;
+			}
+			if (typeof this.#previousHeight === 'number') {
+				this.#height.current = this.#previousHeight;
+			}
+			if (left) this.#left.current = left;
+			if (top) this.#top.current = top;
+		}
+		this.#maximized = newState;
 	};
 
 	toggleFullscreen = (value?: boolean) => {
 		//do stuff
 		this.#fullscreen = typeof value === 'boolean' ? value : !this.#fullscreen;
+		// this.ref.style.setProperty('position', 'fixed');
 	};
 
 	resizeHandle: (
 		position: 'top' | 'bottom' | 'left' | 'right' | 'ne' | 'nw' | 'se' | 'sw'
-	) => Attachment = (position) => {
+	) => Attachment = (position, container = this.#target) => {
 		return (node: Element) => {
 			if (!(node instanceof HTMLElement))
 				throw new Error('Invalid element: only HTMLElement supported.');
-			let mouseIsDown = false;
-			let lastX = 0;
-			let lastY = 0;
-			const main = document.querySelector('main');
 
-			if (!main) throw new Error('<main> HTML element not found.');
+			let mouseIsDown = false;
+			let startingX = 0;
+			let startingY = 0;
+			let startingWidth = 0;
+			let startingHeight = 0;
+			let startingMouseX = 0;
+			let startingMouseY = 0;
 
 			const setMoveStyles = () => {
 				document.body.style.setProperty('user-select', 'none');
 				document.body.style.setProperty('-webkit-user-select', 'none');
-				this.wrapper?.style.setProperty('transition', 'none');
+				this.wrapper?.style.setProperty('transition-property', 'width, height');
 				this.ref?.style.setProperty('transition', 'none');
 			};
 
@@ -282,105 +376,171 @@ export class OSWindow {
 				this.ref?.style.removeProperty('transition');
 			};
 
+			const snapLeft = () => {
+				this.#width.current += this.#left.current;
+				this.#left.current = 0;
+			};
+			const snapRight = (rect: DOMRect) => {
+				this.#width.current = rect.width - startingX + rect.x;
+			};
+			const snapTop = () => {
+				this.#height.current += this.#top.current;
+				this.#top.current = 0;
+			};
+			const snapBottom = (rect: DOMRect) => {
+				this.#height.current = rect.height - startingY + rect.y;
+			};
+
+			const resizeLeft = (deltaMouseX: number, rect: DOMRect) => {
+				this.#width.current = startingWidth - deltaMouseX;
+				this.#left.current = startingX + deltaMouseX - rect.x;
+			};
+			const resizeRight = (deltaMouseX: number) => {
+				this.#width.current = startingWidth + deltaMouseX;
+			};
+			const resizeTop = (deltaMouseY: number, rect: DOMRect) => {
+				this.#height.current = startingHeight - deltaMouseY;
+				this.#top.current = startingY + deltaMouseY - rect.y;
+			};
+			const resizeBottom = (deltaMouseY: number) => {
+				this.#height.current = startingHeight + deltaMouseY;
+			};
+
 			const handleMouseDown = (e: MouseEvent) => {
+				if (!this.ref) throw new Error('Window reference not found.');
+				e.preventDefault();
+
 				mouseIsDown = true;
-				lastX = e.clientX;
-				lastY = e.clientY;
+
+				const rect = this.ref.getBoundingClientRect();
+				startingX = rect.x;
+				startingY = rect.y;
+				startingWidth = rect.width;
+				startingHeight = rect.height;
+				startingMouseX = e.clientX;
+				startingMouseY = e.clientY;
+
 				setMoveStyles();
+
 				document.addEventListener('mousemove', handleMouseMove);
 				document.addEventListener('mouseup', handleMouseUp);
-				main.addEventListener('mouseenter', handleMouseEnter);
-				main.addEventListener('mouseleave', handleMouseLeave);
 			};
 
 			const handleMouseMove = (e: MouseEvent) => {
 				if (!mouseIsDown) return;
 
-				const mainRect = main.getBoundingClientRect();
+				const rect = container.getBoundingClientRect();
+				const deltaMouseX = e.clientX - startingMouseX;
+				const deltaMouseY = e.clientY - startingMouseY;
+				const overflowTop = e.clientY < rect.y;
+				const overflowRight = e.clientX > rect.width + rect.x;
+				const overflowBottom = e.clientY > rect.height + rect.y;
+				const overflowLeft = e.clientX < rect.x;
+				const canResizeWest = e.clientX > rect.x && startingWidth - deltaMouseX > this.#minWidth;
+				const canResizeEast = e.clientX < rect.width + rect.x;
+				const canResizeNorth = e.clientY > rect.y && startingHeight - deltaMouseY > this.#minHeight;
+				const canResizeSouth = e.clientY < rect.height + rect.y;
 
-				const deltaX = e.clientX - lastX;
-				const deltaY = e.clientY - lastY;
-
-				if (
-					position === 'left' &&
-					((deltaX > 0 && this.#width.current > this.#minWidth) || e.clientX <= this.#left.current)
-				) {
-					const currentWidth = this.ref!.clientWidth;
-					const right = innerWidth.current! - this.#left.current - currentWidth;
-					// const newLeft = e.clientX;
-					// const newWidth = innerWidth.current! - e.clientX - right;
-					// const newRight = Math.max(innerWidth.current! - newLeft - currentWidth, 0);
-					// if (right !== newRight) {
-					// 	console.log('left: ', this.#left.current, '->', newLeft);
-					// 	console.log('width: ', this.#width.current, '->', newWidth);
-					// 	console.log('right: ', right, '->', newRight);
-					// 	console.log('right', right);
-					// }
-					this.#width.current = innerWidth.current! - e.clientX + right;
-					this.#left.current = e.clientX;
-					// [--left-(width)--x--]
-					// <--- INNER WIDTH --->
-					// x = innerWidth - left - width
-					// x + width = innerWidth - left
-					// width = innerWidth - left - x
+				if (position === 'left') {
+					if (overflowLeft) {
+						snapLeft();
+					} else if (canResizeWest) {
+						resizeLeft(deltaMouseX, rect);
+					}
 				}
 
-				if (
-					position === 'right' &&
-					((deltaX > 0 &&
-						e.clientX >= 0 &&
-						e.clientX >= this.#left.current &&
-						e.clientX <= innerWidth.current! &&
-						e.clientX >= this.#left.current + this.#width.current) ||
-						deltaX < 0)
-				) {
-					this.#width.current = e.clientX - this.#left.current; // THIS IS THE BETTER WAY
+				if (position === 'right') {
+					if (overflowRight) {
+						snapRight(rect);
+					} else if (canResizeEast) {
+						resizeRight(deltaMouseX);
+					}
 				}
 
-				if (
-					position === 'top' &&
-					((deltaY > 0 &&
-						this.#height.current > this.#minHeight &&
-						e.clientY >= mainRect.y &&
-						e.clientY >= this.#top.current &&
-						e.clientY <= this.#top.current + this.#height.current) ||
-						(deltaY < 0 && e.clientY >= mainRect.y && e.clientY <= this.#top.current + mainRect.y))
-				) {
-					console.log('e.clientY', e.clientY);
-					this.#top.current += deltaY;
-					this.#height.current -= deltaY;
+				if (position === 'top') {
+					if (overflowTop) {
+						snapTop();
+					} else if (canResizeNorth) {
+						resizeTop(deltaMouseY, rect);
+					}
+					if (e.clientY - rect.y < 24) {
+						this.wrapper?.style.setProperty('height', `${this.#target.clientHeight}px`);
+					} else {
+						this.wrapper?.style.setProperty('height', `${this.#height.current}px`);
+					}
 				}
 
-				lastX = e.clientX;
-				lastY = e.clientY;
+				if (position === 'bottom') {
+					if (overflowBottom) {
+						snapBottom(rect);
+					} else if (canResizeSouth) {
+						resizeBottom(deltaMouseY);
+					}
+				}
+
+				if (position === 'nw') {
+					if (overflowLeft) {
+						snapLeft();
+					} else if (canResizeWest) {
+						resizeLeft(deltaMouseX, rect);
+					}
+					if (overflowTop) {
+						snapTop();
+					} else if (canResizeNorth) {
+						resizeTop(deltaMouseY, rect);
+					}
+				}
+
+				if (position === 'ne') {
+					if (overflowLeft) {
+						snapLeft();
+					} else if (canResizeEast) {
+						resizeRight(deltaMouseX);
+					}
+					if (overflowTop) {
+						snapTop();
+					} else if (canResizeNorth) {
+						resizeTop(deltaMouseY, rect);
+					}
+				}
+
+				if (position === 'sw') {
+					if (overflowBottom) {
+						snapBottom(rect);
+					} else if (canResizeSouth) {
+						resizeBottom(deltaMouseY);
+					}
+					if (overflowLeft) {
+						snapLeft();
+					} else if (canResizeWest) {
+						resizeLeft(deltaMouseX, rect);
+					}
+				}
+
+				if (position === 'se') {
+					if (overflowRight) {
+						snapRight(rect);
+					} else if (canResizeEast) {
+						resizeRight(deltaMouseX);
+					}
+					if (overflowBottom) {
+						snapBottom(rect);
+					} else if (canResizeSouth) {
+						resizeBottom(deltaMouseY);
+					}
+				}
 			};
 
-			const handleMouseEnter = (e: MouseEvent) => {
-				mouseIsDown = true;
-			};
-
-			const handleMouseLeave = (e: MouseEvent) => {
-				console.log('mouse left', e);
-
-				if (position === 'right' && e.clientX > innerWidth.current!) {
-					this.#width.current = innerWidth.current! - this.#left.current;
-				}
-
-				if (position === 'left' && e.clientX < 0) {
-					this.#width.current += this.#left.current;
-					this.#left.current = 0;
-				}
-
-				mouseIsDown = false;
-				// resetStyles();
-			};
-
-			const handleMouseUp = () => {
+			const handleMouseUp = (e: MouseEvent) => {
 				resetStyles();
+				const rect = this.#target.getBoundingClientRect();
+
+				if (position === 'top' && e.clientY - rect.y < 24) {
+					this.#height.current = rect.height;
+				}
+
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				main.removeEventListener('mouseenter', handleMouseEnter);
-				main.removeEventListener('mouseleave', handleMouseLeave);
 			};
 
 			node.addEventListener('mousedown', handleMouseDown);
@@ -389,19 +549,19 @@ export class OSWindow {
 				node.removeEventListener('mousedown', handleMouseDown);
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				main.removeEventListener('mouseenter', handleMouseEnter);
-				main.removeEventListener('mouseleave', handleMouseLeave);
 			};
 		};
 	};
 
 	titleBar: Attachment = (node: Element) => {
-		let lastX = 0;
-		let lastY = 0;
-		let mouseIsDown = false;
-		const main = document.querySelector('main');
+		if (!(node instanceof HTMLElement))
+			throw new Error('Invalid element: only HTMLElement supported.');
 
-		if (!main) throw new Error('<main> HTML element not found.');
+		let startingX = 0;
+		let startingY = 0;
+		let startingMouseX = 0;
+		let startingMouseY = 0;
+		let mouseIsDown = false;
 
 		const setMoveStyles = () => {
 			this.ref?.style.setProperty('user-select', 'none');
@@ -417,14 +577,48 @@ export class OSWindow {
 			this.ref?.style.removeProperty('transition');
 		};
 
+		const handleDoubleClick = () => {
+			this.toggleMaximized();
+		};
+
 		const handleMouseDown = (e: MouseEvent) => {
+			if (!this.ref) throw new Error('Window reference not found.');
+			e.preventDefault();
+
 			mouseIsDown = true;
-			lastX = e.clientX;
-			lastY = e.clientY;
+
+			const rect = this.ref?.getBoundingClientRect();
+			startingX = rect.x;
+			startingY = rect.y;
+			startingMouseX = e.clientX;
+			startingMouseY = e.clientY;
+
 			setMoveStyles();
+
 			document.addEventListener('mousemove', handleMouseMove);
 			document.addEventListener('mouseup', handleMouseUp);
-			document.body.addEventListener('mouseleave', handleMouseLeave);
+			this.#target.addEventListener('mouseenter', handleMouseEnter);
+			this.#target.addEventListener('mouseleave', handleMouseLeave);
+		};
+
+		const handleMouseMove = (e: MouseEvent) => {
+			if (!mouseIsDown) return;
+			if (this.#maximized) {
+				// this.minimize();
+			}
+			const rect = this.#target.getBoundingClientRect();
+			const deltaX = e.clientX - startingMouseX;
+			const deltaY = e.clientY - startingMouseY;
+			this.#left.current = startingX + deltaX - rect.x;
+			this.#top.current = startingY + deltaY - rect.y;
+		};
+
+		const handleMouseEnter = () => {
+			// mouseIsDown = true;
+		};
+
+		const handleMouseLeave = () => {
+			// mouseIsDown = false;
 		};
 
 		const handleMouseUp = () => {
@@ -432,38 +626,20 @@ export class OSWindow {
 			resetStyles();
 			document.removeEventListener('mousemove', handleMouseMove);
 			document.removeEventListener('mouseup', handleMouseUp);
-			document.body.removeEventListener('mouseleave', handleMouseLeave);
+			this.#target.removeEventListener('mouseenter', handleMouseEnter);
+			this.#target.removeEventListener('mouseleave', handleMouseLeave);
 		};
 
-		const handleMouseMove = (e: MouseEvent) => {
-			if (!mouseIsDown) return;
-			if (this.#maximized) {
-				console.log(e);
-				// this.minimize();
-			}
-			const deltaX = e.clientX - lastX;
-			const deltaY = e.clientY - lastY;
-			this.#left.current += deltaX;
-			this.#top.current += deltaY;
-			lastX = e.clientX;
-			lastY = e.clientY;
-		};
-
-		const handleMouseLeave = () => {
-			mouseIsDown = false;
-			resetStyles();
-		};
-
-		if (node instanceof HTMLElement) {
-			node.addEventListener('mousedown', handleMouseDown);
-		}
+		node.addEventListener('dblclick', handleDoubleClick);
+		node.addEventListener('mousedown', handleMouseDown);
 
 		return () => {
 			if (node instanceof HTMLElement) {
 				node.removeEventListener('mousedown', handleMouseDown);
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				document.body.removeEventListener('mouseleave', handleMouseLeave);
+				this.#target.removeEventListener('mouseenter', handleMouseEnter);
+				this.#target.removeEventListener('mouseleave', handleMouseLeave);
 			}
 		};
 	};
