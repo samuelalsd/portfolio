@@ -39,6 +39,7 @@
 		"vite-plugin-devtools-json": "^1.0.0"
 	},
 	"dependencies": {
+		"gsap": "^3.14.2",
 		"memoize": "^10.2.0",
 		"runed": "^0.37.1"
 	}

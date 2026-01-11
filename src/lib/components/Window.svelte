@@ -15,17 +15,17 @@
 </script>
 
 <div
-	hidden={self.isMinimized}
 	bind:this={self.wrapper}
-	class="absolute h-fit w-fit rounded-lg bg-white/50 shadow-xl transition-[top,left,height,width]"
+	class="absolute h-fit w-fit origin-bottom rounded-lg bg-white/50 shadow-xl transition-[top,left]"
 	tabindex="0"
 	role="dialog"
 	onmousedown={() => WindowsManager.focusWindow(self)}
 >
+	<div class="rounded-lg bg-white/50 shadow-xl" {@attach self.resizeHelper}></div>
 	<div
 		bind:this={self.ref}
 		data-maximized={self.isMaximized}
-		class="group/window relative z-10 flex origin-center flex-col items-stretch overflow-hidden transition-[width,height] data-[maximized=false]:rounded-lg"
+		class="group/window relative z-10 flex origin-bottom flex-col items-stretch overflow-hidden transition-[width,height] data-[maximized=false]:rounded-lg"
 	>
 		<header
 			class="z-1 flex shrink-0 bg-[#131313] text-white group-data-[maximized=false]/window:rounded-t-lg"

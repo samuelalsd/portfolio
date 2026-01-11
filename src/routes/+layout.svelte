@@ -15,22 +15,8 @@
 	let dock: HTMLElement | undefined = $state();
 	let saved: OSWindow[] = [];
 
-	onMount(() => {
-		console.log('layout mounted');
-		console.log('saved:', saved);
-		saved.forEach((w) =>
-			WindowsManager.open(w.children, {
-				title: w.title
-			})
-		);
-	});
-
 	onDestroy(() => {
-		console.log('layout destroyed');
-		saved = [...$state.snapshot(WindowsManager.stack)];
-		console.log('saving...', saved);
 		WindowsManager.destroyAll();
-		// this is dumb???? probably!!! yes...
 	});
 </script>
 
@@ -74,7 +60,9 @@
 	{@render children()}
 	<button
 		onclick={() =>
-			WindowsManager.open(baseWindow, { title: `This is a test ${WindowsManager.stack.length}` })}
+			WindowsManager.open(baseWindow, {
+				title: `This is a test ${WindowsManager.stack.length}`
+			})}
 		class="relative bg-white px-5 py-3"
 	>
 		Open window
@@ -82,12 +70,13 @@
 
 	<div
 		bind:this={dock}
-		class="dock fixed bottom-2 left-1/2 z-200 container h-18 w-full -translate-x-1/2 rounded-2xl"
+		class="dock fixed bottom-2 left-1/2 z-200 h-18 w-full max-w-4xl -translate-x-1/2 rounded-2xl backdrop-blur-md"
 	>
-		<ul class="flex gap-x-1 p-2">
+		<ul class="flex justify-center gap-x-1 p-2">
 			{#each WindowsManager.stack as w (w.id)}
 				<li class="relative">
 					<button
+						bind:this={w.dockSpace}
 						data-is-focused-window={WindowsManager.windowHasFocus(w)}
 						onclick={() => {
 							console.log('clicked window icon on dock', w.id);

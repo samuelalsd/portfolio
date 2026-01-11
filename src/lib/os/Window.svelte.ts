@@ -1,18 +1,25 @@
-import { mount, unmount, type MountOptions, type Snippet } from 'svelte';
+import { mount, tick, unmount, type MountOptions, type Snippet } from 'svelte';
 import { innerHeight, innerWidth } from 'svelte/reactivity/window';
 import type { Attachment } from 'svelte/attachments';
 import { browser } from '$app/environment';
-import { Clamped } from '$lib/utils/number';
+import { clamp, Clamped } from '$lib/utils/number';
 import Window from '$lib/components/Window.svelte';
+import gsap from 'gsap';
+import { Timer } from '$lib/utils/async';
+import { merge } from '$lib/utils/object';
 
 const defaults = {
 	initiallyMaximized: false,
 	initiallyFullscreen: false,
-	initialWidth: 768,
-	initialHeight: 420,
+	initialRect: {
+		width: 768,
+		height: 420,
+		top: 0,
+		left: 0
+	},
 	minWidth: 384,
 	minHeight: 192
-};
+} as const;
 
 interface OSWindowOptions {
 	title: string;
@@ -21,8 +28,12 @@ interface OSWindowOptions {
 	ref?: HTMLDivElement;
 	initiallyMaximized?: boolean;
 	initiallyFullscreen?: boolean;
-	initialWidth?: number;
-	initialHeight?: number;
+	initialRect?: {
+		width?: number;
+		height?: number;
+		top?: number;
+		left?: number;
+	};
 	minWidth?: number;
 	minHeight?: number;
 }
@@ -82,37 +93,63 @@ export const WindowsManager = new OSWindows();
 
 export class OSWindow {
 	#id: string = $state(`w${WindowsManager.stack.length + 1}-${Date.now()}`);
-	wrapper: HTMLDivElement | undefined = $state();
-	ref: HTMLDivElement | undefined = $state();
 	#target: HTMLElement;
-	title: string;
-
 	#instance: ReturnType<typeof mount> | null = null;
 	#children: Snippet;
-
 	#minWidth: number;
 	#minHeight: number;
 
-	#width: Clamped;
-	#height: Clamped;
-	#left: Clamped;
-	#top: Clamped;
+	#width: number;
+	#height: number;
+	#left: number;
+	#top: number;
 
 	#previousLeft: number | undefined;
 	#previousTop: number | undefined;
 	#previousWidth: number | undefined;
 	#previousHeight: number | undefined;
-
 	#minimized: boolean = $state(false);
 	#maximized: boolean = $state(false);
 	#fullscreen: boolean = $state(false);
 
+	#syncHelperRect: boolean = $state(true);
+
 	#saveRect = () => {
-		this.#previousWidth = this.#width.current;
-		this.#previousHeight = this.#height.current;
-		this.#previousLeft = this.#left.current;
-		this.#previousTop = this.#top.current;
+		this.#previousWidth = this.#width;
+		this.#previousHeight = this.#height;
+		this.#previousLeft = this.#left;
+		this.#previousTop = this.#top;
+		console.log('saving top...', this.#top);
+		console.log('saving left...', this.#left);
+		console.log('saving width...', this.#width);
+		console.log('saving height...', this.#height);
 	};
+
+	#updateRect = (
+		{ left, top, width, height }: Partial<Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>> = {},
+		force = false
+	) => {
+		if (force) {
+			if (typeof left === 'number') this.#left = left;
+			if (typeof top === 'number') this.#top = top;
+			if (typeof width === 'number') this.#width = width;
+			if (typeof height === 'number') this.#height = height;
+		} else {
+			if (typeof left === 'number')
+				this.#left = clamp(left, -this.#target.clientWidth + 64, this.#target.clientWidth - 64);
+			if (typeof top === 'number') this.#top = clamp(top, 0, this.#target.clientHeight - 64);
+			if (typeof width === 'number')
+				this.#width = clamp(width, this.#minWidth, this.#target.clientWidth);
+			if (typeof height === 'number')
+				this.#height = clamp(height, this.#minHeight, this.#target.clientHeight);
+		}
+	};
+
+	dockSpace: HTMLElement | undefined = $state();
+	#resizeHelper: HTMLElement | undefined = $state();
+	wrapper: HTMLDivElement | undefined = $state();
+	ref: HTMLDivElement | undefined = $state();
+	title: string;
 
 	constructor(children: Snippet, options: OSWindowOptions) {
 		if (!browser) throw new Error('OSWindow cannot be created outside of a browser environment.');
@@ -124,14 +161,10 @@ export class OSWindow {
 			title,
 			initiallyMaximized,
 			initiallyFullscreen,
-			initialWidth,
-			initialHeight,
+			initialRect,
 			minWidth,
 			minHeight
-		} = {
-			...defaults,
-			...options
-		};
+		} = merge.withOptions({ allowUndefinedOverrides: false }, defaults, options);
 
 		if (typeof target === 'string') {
 			const found = document.querySelector(target);
@@ -145,54 +178,34 @@ export class OSWindow {
 			throw new Error('Invalid target element.');
 		}
 
-		this.#children = children;
 		this.title = title;
 		this.wrapper = wrapper;
 		this.ref = ref;
+		this.#children = children;
+		this.#minWidth = minWidth!;
+		this.#minHeight = minHeight!;
 
-		this.#minWidth = minWidth;
-		this.#minHeight = minHeight;
-
-		this.#width = new Clamped(initialWidth, {
-			min: this.#minWidth,
-			max: () => innerWidth.current! // TODO: should be changed to reactive container width
-		});
-		this.#height = new Clamped(initialHeight, {
-			min: this.#minHeight,
-			max: () => innerHeight.current! // TODO: should be changed to reactive container height
-		});
-		this.#left = new Clamped(0, {
-			min: -this.#target.clientWidth + 64,
-			max: () => this.#target.clientWidth - 64
-		});
-		this.#top = new Clamped(0, {
-			min: 0,
-			max: () => this.#target.clientHeight - 64
-		});
+		this.#width = $state(initialRect!.width!);
+		this.#height = $state(initialRect!.height!);
+		this.#left = $state(initialRect!.left!);
+		this.#top = $state(initialRect!.top!);
 
 		if (initiallyFullscreen) this.toggleFullscreen(true);
 		else if (initiallyMaximized) this.toggleMaximized(true);
-		else {
-			this.#width.current = initialWidth;
-			this.#height.current = initialHeight;
-			this.#previousWidth = initialWidth;
-			this.#previousHeight = initialHeight;
-		}
+		else this.#saveRect();
 
 		$effect.root(() => {
 			$effect(() => {
 				if (this.wrapper) {
-					this.wrapper.style.setProperty('left', `${this.#left.current}px`);
-					this.wrapper.style.setProperty('top', `${this.#top.current}px`);
-					this.wrapper.style.setProperty('width', `${this.#width.current}px`);
-					this.wrapper.style.setProperty('height', `${this.#height.current}px`);
+					this.wrapper.style.setProperty('left', `${this.#left}px`);
+					this.wrapper.style.setProperty('top', `${this.#top}px`);
 				}
 			});
 
 			$effect(() => {
 				if (this.ref) {
-					this.ref.style.setProperty('width', `${this.#width.current}px`);
-					this.ref.style.setProperty('height', `${this.#height.current}px`);
+					this.ref.style.setProperty('width', `${this.#width}px`);
+					this.ref.style.setProperty('height', `${this.#height}px`);
 				}
 			});
 
@@ -271,10 +284,7 @@ export class OSWindow {
 
 	toggleMinimized: {
 		(value?: true): void;
-		(
-			value?: false,
-			{ left, top }?: { left?: number; top?: number; width?: number; height?: number }
-		): void;
+		(value?: false, rect?: Partial<Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>>): void;
 	} = (
 		value,
 		{
@@ -284,59 +294,79 @@ export class OSWindow {
 			height = this.#previousHeight
 		} = {}
 	) => {
-		if (!WindowsManager.windowHasFocus(this)) {
+		if (!this.dockSpace || !this.wrapper || !this.ref) return;
+
+		if (!WindowsManager.windowHasFocus(this) && !this.#minimized) {
 			WindowsManager.focusWindow(this);
-			this.#minimized = false;
 			return;
 		}
 
 		const newState = typeof value === 'boolean' ? value : !this.#minimized;
 
-		// we need a way to bypass the clamped values... maybe should NOT use instances of Clamped()
 		if (newState) {
-			console.log('minimizing and saving rect...');
-			// play some animation (with gsap or just native????)
 			this.#saveRect();
+			this.#updateRect(this.dockSpace.getBoundingClientRect(), true);
+			const timer = new Timer(() => {
+				this.wrapper!.hidden = true;
+				this.#minimized = true;
+			}, 300);
+			// gsap.to(this.wrapper, {
+			// 	scale: 0,
+			// 	x: rect.x + rect.width / 2 - this.#left,
+			// 	y: rect.y - rect.height / 2 - this.#top,
+			// 	transformOrigin: `bottom center ${this.#target.clientHeight - rect.top + rect.height / 2}px`,
+			// 	duration: 0.3,
+			// 	ease: 'power2.inOut',
+			// 	onComplete: () => {
+			// 		this.wrapper!.hidden = true;
+			// 		this.#minimized = true;
+			// 	}
+			// });
 		} else {
-			if (left) this.#left.current = left;
-			else this.#left.current = 0;
-			if (top) this.#top.current = top;
-			else this.#top.current = 0;
-			if (width) this.#width.current = width;
-			else this.#width.current = this.#target.clientWidth;
-			if (height) this.#height.current = height;
-			else this.#height.current = this.#target.clientHeight;
-			// something here
-			WindowsManager.focusWindow(this);
+			this.wrapper!.hidden = false;
+			const timer = new Timer(() => {
+				this.#updateRect({ left, top, width, height });
+				this.#minimized = false;
+			}, 50);
+			// gsap.to(this.wrapper, {
+			// 	scale: 1,
+			// 	x: 0,
+			// 	y: 0,
+			// 	transformOrigin: `bottom center ${this.#target.clientHeight - rect.top + rect.height / 2}px`,
+			// 	duration: 0.3,
+			// 	ease: 'power2.inOut',
+			// 	onComplete: () => {
+			// 		WindowsManager.focusWindow(this);
+			// 		this.#minimized = false;
+			// 	}
+			// });
 		}
-
-		this.#minimized = newState;
 	};
 
 	toggleMaximized: {
 		(value?: true): void;
-		(value?: false, { left, top }?: { left?: number; top?: number }): void;
-	} = (value, { left = this.#previousLeft, top = this.#previousTop } = {}) => {
+		(value?: false, rect?: Partial<Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>>): void;
+	} = (
+		value,
+		{
+			width = this.#previousWidth,
+			height = this.#previousHeight,
+			left = this.#previousLeft,
+			top = this.#previousTop
+		} = {}
+	) => {
 		const newState = typeof value === 'boolean' ? value : !this.#maximized;
 		if (newState) {
-			this.#saveRect();
-
 			const rect = this.#target.getBoundingClientRect();
-
-			this.#width.current = rect.width;
-			this.#height.current = rect.height;
-
-			this.#left.current = 0;
-			this.#top.current = 0;
+			this.#saveRect();
+			this.#updateRect({ left: 0, top: 0, width: rect.width, height: rect.height });
 		} else {
-			if (typeof this.#previousWidth === 'number') {
-				this.#width.current = this.#previousWidth;
-			}
-			if (typeof this.#previousHeight === 'number') {
-				this.#height.current = this.#previousHeight;
-			}
-			if (left) this.#left.current = left;
-			if (top) this.#top.current = top;
+			this.#updateRect({
+				width,
+				height,
+				left,
+				top
+			});
 		}
 		this.#maximized = newState;
 	};
@@ -361,11 +391,12 @@ export class OSWindow {
 			let startingHeight = 0;
 			let startingMouseX = 0;
 			let startingMouseY = 0;
+			let transitioned = false;
 
 			const setMoveStyles = () => {
 				document.body.style.setProperty('user-select', 'none');
 				document.body.style.setProperty('-webkit-user-select', 'none');
-				this.wrapper?.style.setProperty('transition-property', 'width, height');
+				this.wrapper?.style.setProperty('transition', 'none');
 				this.ref?.style.setProperty('transition', 'none');
 			};
 
@@ -377,33 +408,55 @@ export class OSWindow {
 			};
 
 			const snapLeft = () => {
-				this.#width.current += this.#left.current;
-				this.#left.current = 0;
+				this.#updateRect({
+					width: this.#width + this.#left,
+					left: 0
+				});
 			};
 			const snapRight = (rect: DOMRect) => {
-				this.#width.current = rect.width - startingX + rect.x;
+				this.#updateRect({
+					width: rect.width - startingX + rect.x
+				});
 			};
 			const snapTop = () => {
-				this.#height.current += this.#top.current;
-				this.#top.current = 0;
+				this.#updateRect({
+					height: this.#height + this.#top,
+					top: 0
+				});
 			};
 			const snapBottom = (rect: DOMRect) => {
-				this.#height.current = rect.height - startingY + rect.y;
+				this.#updateRect({
+					height: rect.height - startingY + rect.y
+				});
+			};
+			const snapVertical = (rect: DOMRect) => {
+				this.#updateRect({
+					height: rect.height,
+					top: 0
+				});
 			};
 
 			const resizeLeft = (deltaMouseX: number, rect: DOMRect) => {
-				this.#width.current = startingWidth - deltaMouseX;
-				this.#left.current = startingX + deltaMouseX - rect.x;
+				this.#updateRect({
+					width: startingWidth - deltaMouseX,
+					left: startingX + deltaMouseX - rect.x
+				});
 			};
 			const resizeRight = (deltaMouseX: number) => {
-				this.#width.current = startingWidth + deltaMouseX;
+				this.#updateRect({
+					width: startingWidth + deltaMouseX
+				});
 			};
 			const resizeTop = (deltaMouseY: number, rect: DOMRect) => {
-				this.#height.current = startingHeight - deltaMouseY;
-				this.#top.current = startingY + deltaMouseY - rect.y;
+				this.#updateRect({
+					height: startingHeight - deltaMouseY,
+					top: startingY + deltaMouseY - rect.y
+				});
 			};
 			const resizeBottom = (deltaMouseY: number) => {
-				this.#height.current = startingHeight + deltaMouseY;
+				this.#updateRect({
+					height: startingHeight + deltaMouseY
+				});
 			};
 
 			const handleMouseDown = (e: MouseEvent) => {
@@ -413,6 +466,7 @@ export class OSWindow {
 				mouseIsDown = true;
 
 				const rect = this.ref.getBoundingClientRect();
+
 				startingX = rect.x;
 				startingY = rect.y;
 				startingWidth = rect.width;
@@ -463,11 +517,41 @@ export class OSWindow {
 					} else if (canResizeNorth) {
 						resizeTop(deltaMouseY, rect);
 					}
-					if (e.clientY - rect.y < 24) {
-						this.wrapper?.style.setProperty('height', `${this.#target.clientHeight}px`);
-					} else {
-						this.wrapper?.style.setProperty('height', `${this.#height.current}px`);
-					}
+
+					// if (e.clientY - rect.y < 32) {
+					// 	if (!transitioned) {
+					// 		gsap.to(this.#resizeHelper!, {
+					// 			top: rect.y,
+					// 			height: this.#target.clientHeight,
+					// 			duration: 0.2
+					// 		});
+					// 		transitioned = true;
+					// 	}
+					// } else {
+					// 	if (transitioned) {
+					// 		gsap
+					// 			.to(this.#resizeHelper!, {
+					// 				width: this.#width,
+					// 				height: this.#height,
+					// 				top: this.#top + rect.y,
+					// 				left: this.#left,
+					// 				duration: 0.2
+					// 			})
+					// 			.then(() => {
+					// 				this.#resizeHelper!.style.setProperty('height', `${this.#height}px`);
+					// 				this.#resizeHelper!.style.setProperty('width', `${this.#width}px`);
+					// 				this.#resizeHelper!.style.setProperty('top', `${this.#top + rect.y}px`);
+					// 				this.#resizeHelper!.style.setProperty('left', `${this.#left}px`);
+					// 			});
+					// 		transitioned = false;
+					// 	} else {
+					// 		this.#resizeHelper?.style.setProperty('height', `${this.#height}px`);
+					// 		this.#resizeHelper?.style.setProperty('width', `${this.#width}px`);
+					// 		this.#resizeHelper?.style.setProperty('top', `${this.#top + rect.y}px`);
+					// 		this.#resizeHelper?.style.setProperty('left', `${this.#left}px`);
+					// 	}
+					// 	// this.wrapper?.style.setProperty('height', `${this.#height}px`);
+					// }
 				}
 
 				if (position === 'bottom') {
@@ -535,18 +619,33 @@ export class OSWindow {
 				resetStyles();
 				const rect = this.#target.getBoundingClientRect();
 
-				if (position === 'top' && e.clientY - rect.y < 24) {
-					this.#height.current = rect.height;
+				if (position === 'top' && e.clientY - rect.y < 32) {
+					this.#saveRect();
+					this.#updateRect({
+						height: rect.height,
+						top: 0
+					});
 				}
 
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
 			};
 
+			const handleDoubleClick = () => {
+				const rect = this.#target.getBoundingClientRect();
+				snapVertical(rect);
+			};
+
 			node.addEventListener('mousedown', handleMouseDown);
+			if (position === 'top') {
+				node.addEventListener('dblclick', handleDoubleClick);
+			}
 
 			return () => {
 				node.removeEventListener('mousedown', handleMouseDown);
+				if (position === 'top') {
+					node.removeEventListener('dblclick', handleDoubleClick);
+				}
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
 			};
@@ -597,28 +696,66 @@ export class OSWindow {
 
 			document.addEventListener('mousemove', handleMouseMove);
 			document.addEventListener('mouseup', handleMouseUp);
-			this.#target.addEventListener('mouseenter', handleMouseEnter);
-			this.#target.addEventListener('mouseleave', handleMouseLeave);
 		};
 
 		const handleMouseMove = (e: MouseEvent) => {
 			if (!mouseIsDown) return;
-			if (this.#maximized) {
-				// this.minimize();
-			}
 			const rect = this.#target.getBoundingClientRect();
 			const deltaX = e.clientX - startingMouseX;
 			const deltaY = e.clientY - startingMouseY;
-			this.#left.current = startingX + deltaX - rect.x;
-			this.#top.current = startingY + deltaY - rect.y;
-		};
+			if (this.#maximized) {
+				if (typeof this.#previousWidth === 'number')
+					startingX = e.clientX * (this.#previousWidth / rect.width);
+				this.toggleMaximized(false, {
+					left: startingX + deltaX - rect.x,
+					top: startingY + deltaY - rect.y
+				});
+			} else {
+				this.#updateRect({
+					left: startingX + deltaX - rect.x,
+					top: startingY + deltaY - rect.y
+				});
+			}
 
-		const handleMouseEnter = () => {
-			// mouseIsDown = true;
-		};
-
-		const handleMouseLeave = () => {
-			// mouseIsDown = false;
+			if (this.#resizeHelper) {
+				if (e.clientX < 48) {
+					this.#syncHelperRect = false;
+					gsap.to(this.#resizeHelper, {
+						left: 8,
+						top: this.#target.offsetTop + 8,
+						width: this.#target.clientWidth / 2 - 8,
+						height: this.#target.clientHeight - 16,
+						duration: 0.1,
+						ease: 'cubic-bezier(0.4, 0, 0.2, 1)'
+					});
+				} else if (e.clientX > rect.width - 48) {
+					this.#syncHelperRect = false;
+					gsap.to(this.#resizeHelper, {
+						left: 'auto',
+						right: 8,
+						top: this.#target.offsetTop + 8,
+						width: this.#target.clientWidth / 2 - 8,
+						height: this.#target.clientHeight - 16,
+						duration: 0.1,
+						ease: 'cubic-bezier(0.4, 0, 0.2, 1)'
+					});
+				} else {
+					if (!this.#syncHelperRect) {
+						gsap
+							.to(this.#resizeHelper, {
+								left: this.#left,
+								top: this.#top + rect.y,
+								width: this.#width,
+								height: this.#height,
+								duration: 0.1,
+								ease: 'cubic-bezier(0.4, 0, 0.2, 1)'
+							})
+							.then(() => {
+								this.#syncHelperRect = true;
+							});
+					}
+				}
+			}
 		};
 
 		const handleMouseUp = () => {
@@ -626,8 +763,6 @@ export class OSWindow {
 			resetStyles();
 			document.removeEventListener('mousemove', handleMouseMove);
 			document.removeEventListener('mouseup', handleMouseUp);
-			this.#target.removeEventListener('mouseenter', handleMouseEnter);
-			this.#target.removeEventListener('mouseleave', handleMouseLeave);
 		};
 
 		node.addEventListener('dblclick', handleDoubleClick);
@@ -638,9 +773,39 @@ export class OSWindow {
 				node.removeEventListener('mousedown', handleMouseDown);
 				document.removeEventListener('mousemove', handleMouseMove);
 				document.removeEventListener('mouseup', handleMouseUp);
-				this.#target.removeEventListener('mouseenter', handleMouseEnter);
-				this.#target.removeEventListener('mouseleave', handleMouseLeave);
 			}
+		};
+	};
+
+	resizeHelper = (node: HTMLElement) => {
+		this.#resizeHelper = node;
+
+		node.style.position = 'fixed';
+
+		// $effect(() => {
+		// 	if (this.#syncHelperRect) node.style.setProperty('transition', 'none');
+		// 	else node.style.setProperty('transition', 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)');
+		// });
+
+		$effect(() => {
+			if (this.#syncHelperRect)
+				node.style.top = `${this.#top + this.#target.getBoundingClientRect().y}px`;
+		});
+
+		$effect(() => {
+			if (this.#syncHelperRect) node.style.left = `${this.#left}px`;
+		});
+
+		$effect(() => {
+			if (this.#syncHelperRect) node.style.width = `${this.#width}px`;
+		});
+
+		$effect(() => {
+			if (this.#syncHelperRect) node.style.height = `${this.#height}px`;
+		});
+
+		return () => {
+			// detroy stuff
 		};
 	};
 }
