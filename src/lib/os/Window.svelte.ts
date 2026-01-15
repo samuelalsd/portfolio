@@ -661,6 +661,7 @@ export class OSWindow {
 		let startingMouseX = 0;
 		let startingMouseY = 0;
 		let mouseIsDown = false;
+		let resizeHelperIsOn = false;
 
 		const setMoveStyles = () => {
 			this.ref?.style.setProperty('user-select', 'none');
@@ -719,6 +720,7 @@ export class OSWindow {
 
 			if (this.#resizeHelper) {
 				if (e.clientX < 48) {
+					resizeHelperIsOn = true;
 					this.#syncHelperRect = false;
 					gsap.to(this.#resizeHelper, {
 						left: 8,
@@ -729,6 +731,7 @@ export class OSWindow {
 						ease: 'cubic-bezier(0.4, 0, 0.2, 1)'
 					});
 				} else if (e.clientX > rect.width - 48) {
+					resizeHelperIsOn = true;
 					this.#syncHelperRect = false;
 					gsap.to(this.#resizeHelper, {
 						left: 'auto',
@@ -740,6 +743,7 @@ export class OSWindow {
 						ease: 'cubic-bezier(0.4, 0, 0.2, 1)'
 					});
 				} else {
+					resizeHelperIsOn = false;
 					if (!this.#syncHelperRect) {
 						gsap
 							.to(this.#resizeHelper, {
@@ -758,7 +762,24 @@ export class OSWindow {
 			}
 		};
 
-		const handleMouseUp = () => {
+		const handleMouseUp = (e: MouseEvent) => {
+			if (mouseIsDown && resizeHelperIsOn) {
+				if (e.clientX < 48) {
+					this.#updateRect({
+						width: this.#target.clientWidth / 2,
+						height: this.#target.clientHeight,
+						left: 0,
+						top: 0
+					});
+				} else if (e.clientX > this.#target.clientWidth - 48) {
+					this.#updateRect({
+						width: this.#target.clientWidth / 2,
+						height: this.#target.clientHeight,
+						left: this.#target.clientWidth / 2,
+						top: 0
+					});
+				}
+			}
 			mouseIsDown = false;
 			resetStyles();
 			document.removeEventListener('mousemove', handleMouseMove);
